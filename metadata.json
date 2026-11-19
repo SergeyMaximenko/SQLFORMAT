@@ -1,0 +1,6 @@
+{
+  "name": "SQL Форматер",
+  "description": "Вебзастосунок для миттєвого форматування, підсвічування синтаксису та мініфікації SQL-запитів.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
