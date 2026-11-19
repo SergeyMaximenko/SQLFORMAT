@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { AlertTriangle, FileCode2 } from 'lucide-react';
-import { tokenizeSqlLines, type TokenType } from '../utils/sqlHighlight';
+import { tokenizeSqlLines, type SqlToken, type TokenType } from '../utils/sqlHighlight';
+import type { SqlValidationError } from '../utils/sqlValidator';
 
 interface SqlCodeViewProps {
   formattedSql: string;
@@ -8,6 +9,8 @@ interface SqlCodeViewProps {
   error: string | null;
   showDiff: boolean;
   onLoadSample: () => void;
+  validationErrors?: SqlValidationError[];
+  syntaxCheckEnabled?: boolean;
 }
 
 const TOKEN_CLASSES: Record<TokenType, string> = {
@@ -35,7 +38,6 @@ function computeLineDiff(beforeText: string, afterText: string): DiffLine[] {
   const m = a.length;
   const n = b.length;
 
-  // Guard for very large queries so UI stays instant
   if (m * n > 25000) {
     return b.map((text, idx) => ({
       kind: 'same',
@@ -90,17 +92,41 @@ function computeLineDiff(beforeText: string, afterText: string): DiffLine[] {
   return diff;
 }
 
+function tokenHasSyntaxError(
+  tok: SqlToken,
+  errorSnippets: Set<string>
+): boolean {
+  if (!errorSnippets.size) return false;
+  const normalized = tok.value.trim().toLowerCase();
+  if (!normalized) return false;
+  return errorSnippets.has(normalized);
+}
+
 export const SqlCodeView: React.FC<SqlCodeViewProps> = ({
   formattedSql,
   rawSql,
   error,
   showDiff,
   onLoadSample,
+  validationErrors = [],
+  syntaxCheckEnabled = false,
 }) => {
   const tokenizedLines = useMemo(
     () => (formattedSql ? tokenizeSqlLines(formattedSql) : []),
     [formattedSql]
   );
+
+  const errorSnippets = useMemo(() => {
+    if (!syntaxCheckEnabled || !validationErrors.length) return new Set<string>();
+    const set = new Set<string>();
+    for (const err of validationErrors) {
+      const s = err.snippet.trim().toLowerCase();
+      if (s && s.length >= 2) {
+        set.add(s);
+      }
+    }
+    return set;
+  }, [syntaxCheckEnabled, validationErrors]);
 
   const diffLines = useMemo(
     () => (showDiff && formattedSql ? computeLineDiff(rawSql, formattedSql) : []),
@@ -197,11 +223,25 @@ export const SqlCodeView: React.FC<SqlCodeViewProps> = ({
       <div className="flex min-w-max py-4 font-mono text-[13px] leading-6">
         <div
           aria-hidden="true"
-          className="w-12 shrink-0 select-none border-r border-slate-200 bg-slate-50/80 pr-3 text-right text-slate-400 tabular-nums dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-600"
+          className="w-12 shrink-0 select-none border-r border-slate-200 bg-slate-50/80 text-right text-slate-400 tabular-nums dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-600"
         >
-          {tokenizedLines.map((_, idx) => (
-            <div key={idx}>{idx + 1}</div>
-          ))}
+          {tokenizedLines.map((tokens, idx) => {
+            const lineHasBadToken = tokens.some((tok) =>
+              tokenHasSyntaxError(tok, errorSnippets)
+            );
+            return (
+              <div
+                key={idx}
+                className={`pr-3 ${
+                  lineHasBadToken
+                    ? 'bg-red-500/15 font-semibold text-red-600 dark:bg-red-500/20 dark:text-red-400'
+                    : ''
+                }`}
+              >
+                {idx + 1}
+              </div>
+            );
+          })}
         </div>
         <pre className="flex-1 px-4 font-mono text-[13px] leading-6">
           <code>
@@ -210,11 +250,21 @@ export const SqlCodeView: React.FC<SqlCodeViewProps> = ({
                 {tokens.length === 0 ? (
                   '\u00A0'
                 ) : (
-                  tokens.map((tok, tokIdx) => (
-                    <span key={tokIdx} className={TOKEN_CLASSES[tok.type]}>
-                      {tok.value}
-                    </span>
-                  ))
+                  tokens.map((tok, tokIdx) => {
+                    const isBad = tokenHasSyntaxError(tok, errorSnippets);
+                    return (
+                      <span
+                        key={tokIdx}
+                        className={
+                          isBad
+                            ? 'rounded-xs bg-red-500/20 font-semibold text-red-700 underline decoration-red-600 decoration-wavy underline-offset-4 dark:bg-red-500/30 dark:text-red-300 dark:decoration-red-400'
+                            : TOKEN_CLASSES[tok.type]
+                        }
+                      >
+                        {tok.value}
+                      </span>
+                    );
+                  })
                 )}
               </div>
             ))}

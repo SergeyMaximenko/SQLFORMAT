@@ -7,8 +7,10 @@ import {
   type SqlLanguage,
 } from 'sql-formatter';
 import {
+  AlertCircle,
   ArrowRight,
   Check,
+  CheckCircle2,
   ClipboardPaste,
   Copy,
   Download,
@@ -16,6 +18,7 @@ import {
   Minimize2,
   Moon,
   RotateCcw,
+  ShieldCheck,
   Sparkles,
   Sun,
   Trash2,
@@ -23,6 +26,7 @@ import {
 } from 'lucide-react';
 import { SQL_DIALECTS, SQL_PRESETS, type SqlPreset } from './data/sqlPresets';
 import { getTextMetrics, minifySql } from './utils/sqlHighlight';
+import { validateSqlSyntax } from './utils/sqlValidator';
 import { SqlEditor } from './components/SqlEditor';
 import { SqlCodeView } from './components/SqlCodeView';
 
@@ -36,6 +40,7 @@ interface FormatConfig {
   logicalOperatorNewline: LogicalOperatorNewline;
   linesBetweenQueries: number;
   autoFormat: boolean;
+  syntaxCheck: boolean;
 }
 
 interface HistoryEntry {
@@ -57,6 +62,7 @@ const DEFAULT_CONFIG: FormatConfig = {
   logicalOperatorNewline: 'before',
   linesBetweenQueries: 2,
   autoFormat: true,
+  syntaxCheck: true,
 };
 
 function runSqlFormat(input: string, cfg: FormatConfig): { output: string; error: string | null } {
@@ -105,6 +111,7 @@ export default function App() {
   const [copied, setCopied] = useState<boolean>(false);
   const [pasteNotice, setPasteNotice] = useState<string | null>(null);
   const [presetIndex, setPresetIndex] = useState<number>(0);
+  const [jumpTarget, setJumpTarget] = useState<{ offset: number; seq: number } | null>(null);
 
   const [history, setHistory] = useState<HistoryEntry[]>(() => {
     try {
@@ -280,6 +287,13 @@ export default function App() {
 
   const inputMetrics = useMemo(() => getTextMetrics(inputSql), [inputSql]);
   const outputMetrics = useMemo(() => getTextMetrics(outputSql), [outputSql]);
+  const validationErrors = useMemo(
+    () =>
+      config.syntaxCheck
+        ? validateSqlSyntax(inputSql, config.language)
+        : [],
+    [config.syntaxCheck, config.language, inputSql]
+  );
 
   const dialectLabel = useMemo(
     () =>
@@ -522,6 +536,25 @@ export default function App() {
             </div>
 
             <div className="ml-auto flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    syntaxCheck: !prev.syntaxCheck,
+                  }))
+                }
+                aria-pressed={config.syntaxCheck}
+                className={`inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                  config.syntaxCheck
+                    ? 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100/80 dark:border-sky-800/80 dark:bg-sky-950/60 dark:text-sky-300 dark:hover:bg-sky-950'
+                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
+                }`}
+              >
+                <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Перевірка синтаксису</span>
+              </button>
+
               <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300 whitespace-nowrap">
                 <input
                   type="checkbox"
@@ -574,6 +607,22 @@ export default function App() {
                   <span className="text-xs text-slate-500 tabular-nums dark:text-slate-400 whitespace-nowrap">
                     {inputMetrics.lines} ряд. · {inputMetrics.chars} симв.
                   </span>
+                  {config.syntaxCheck && inputSql.trim() && (
+                    validationErrors.length > 0 ? (
+                      <span className="inline-flex items-center gap-1 text-xs font-medium text-red-600 tabular-nums dark:text-red-400 whitespace-nowrap">
+                        <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                        <span>
+                          {validationErrors.length}{' '}
+                          {validationErrors.length === 1 ? 'помилка' : 'помилок'}
+                        </span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 dark:text-emerald-400 whitespace-nowrap">
+                        <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                        <span>Синтаксис вірний</span>
+                      </span>
+                    )
+                  )}
                 </div>
 
                 <div className="flex items-center gap-1.5">
@@ -627,8 +676,56 @@ export default function App() {
                 value={inputSql}
                 onChange={setInputSql}
                 onFormatShortcut={handleManualFormat}
+                errors={validationErrors}
+                syntaxCheckEnabled={config.syntaxCheck}
+                jumpTarget={jumpTarget}
                 placeholder="Вставте сюди ваш SQL-запит (наприклад: select id, name from users where active = 1)..."
               />
+
+              {config.syntaxCheck && validationErrors.length > 0 && (
+                <div
+                  role="region"
+                  aria-label="Виявлені синтаксичні помилки"
+                  className="max-h-40 overflow-y-auto border-t border-red-200 bg-red-50/75 px-4 py-2.5 dark:border-red-900/50 dark:bg-red-950/35"
+                >
+                  <ul className="divide-y divide-red-200/70 dark:divide-red-900/40">
+                    {validationErrors.map((err) => (
+                      <li key={err.id} className="py-1.5 first:pt-0 last:pb-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setJumpTarget((prev) => ({
+                              offset: err.startOffset,
+                              seq: (prev?.seq ?? 0) + 1,
+                            }))
+                          }
+                          className="flex w-full items-start gap-2.5 rounded text-left text-xs transition-colors hover:bg-red-100/70 focus-visible:outline-2 focus-visible:outline-red-600 dark:hover:bg-red-900/30"
+                        >
+                          <AlertCircle
+                            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400"
+                            aria-hidden="true"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-baseline gap-x-2">
+                              <span className="font-mono font-semibold text-red-700 tabular-nums dark:text-red-300">
+                                Ряд. {err.line}, поз. {err.column}
+                              </span>
+                              <span className="font-medium text-red-900 dark:text-red-100">
+                                {err.message}
+                              </span>
+                            </div>
+                            {err.hint && (
+                              <p className="mt-0.5 text-red-700/90 dark:text-red-300/90">
+                                {err.hint}
+                              </p>
+                            )}
+                          </div>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
 
             {/* Output Pane */}
@@ -704,6 +801,8 @@ export default function App() {
                 error={formatError}
                 showDiff={showDiff}
                 onLoadSample={handleCyclePreset}
+                validationErrors={validationErrors}
+                syntaxCheckEnabled={config.syntaxCheck}
               />
             </div>
           </section>
