@@ -1,12 +1,12 @@
 import React, { useMemo } from 'react';
-import { AlertTriangle, FileCode2 } from 'lucide-react';
+import { FileCode2 } from 'lucide-react';
 import { tokenizeSqlLines, type SqlToken, type TokenType } from '../utils/sqlHighlight';
 import type { SqlValidationError } from '../utils/sqlValidator';
 
 interface SqlCodeViewProps {
   formattedSql: string;
   rawSql: string;
-  error: string | null;
+  hasFormatError: boolean;
   showDiff: boolean;
   onLoadSample: () => void;
   validationErrors?: SqlValidationError[];
@@ -24,6 +24,9 @@ const TOKEN_CLASSES: Record<TokenType, string> = {
   identifier: 'text-rose-700 dark:text-rose-300',
   plain: 'text-slate-800 dark:text-slate-200',
 };
+
+const ERROR_TOKEN_CLASS =
+  'rounded-xs bg-red-500/20 font-semibold text-red-700 underline decoration-red-600 decoration-wavy underline-offset-4 dark:bg-red-500/30 dark:text-red-300 dark:decoration-red-400';
 
 interface DiffLine {
   kind: 'same' | 'added' | 'removed';
@@ -92,75 +95,118 @@ function computeLineDiff(beforeText: string, afterText: string): DiffLine[] {
   return diff;
 }
 
-function tokenHasSyntaxError(
-  tok: SqlToken,
-  errorSnippets: Set<string>
-): boolean {
-  if (!errorSnippets.size) return false;
-  const normalized = tok.value.trim().toLowerCase();
-  if (!normalized) return false;
-  return errorSnippets.has(normalized);
+interface RenderedTokenSlice {
+  value: string;
+  type: TokenType;
+  isError: boolean;
+}
+
+function splitTokensWithErrors(
+  tokens: SqlToken[],
+  lineStartOffset: number,
+  errors: SqlValidationError[]
+): RenderedTokenSlice[] {
+  if (!errors.length) {
+    return tokens.map((t) => ({ value: t.value, type: t.type, isError: false }));
+  }
+
+  const slices: RenderedTokenSlice[] = [];
+  let offset = lineStartOffset;
+
+  for (const tok of tokens) {
+    const tokStart = offset;
+    const tokEnd = tokStart + tok.value.length;
+    offset = tokEnd;
+
+    const overlapping = errors
+      .filter((e) => e.startOffset < tokEnd && e.endOffset > tokStart)
+      .sort((a, b) => a.startOffset - b.startOffset);
+
+    if (!overlapping.length) {
+      slices.push({ value: tok.value, type: tok.type, isError: false });
+      continue;
+    }
+
+    let cursor = tokStart;
+    for (const err of overlapping) {
+      const errStart = Math.max(cursor, err.startOffset);
+      const errEnd = Math.min(tokEnd, err.endOffset);
+      if (errStart > cursor) {
+        slices.push({
+          value: tok.value.slice(cursor - tokStart, errStart - tokStart),
+          type: tok.type,
+          isError: false,
+        });
+      }
+      if (errEnd > errStart) {
+        slices.push({
+          value: tok.value.slice(errStart - tokStart, errEnd - tokStart),
+          type: tok.type,
+          isError: true,
+        });
+        cursor = errEnd;
+      }
+    }
+
+    if (cursor < tokEnd) {
+      slices.push({
+        value: tok.value.slice(cursor - tokStart),
+        type: tok.type,
+        isError: false,
+      });
+    }
+  }
+
+  return slices;
 }
 
 export const SqlCodeView: React.FC<SqlCodeViewProps> = ({
   formattedSql,
   rawSql,
-  error,
+  hasFormatError,
   showDiff,
   onLoadSample,
   validationErrors = [],
   syntaxCheckEnabled = false,
 }) => {
+  const displaySql = hasFormatError ? rawSql : formattedSql;
+
   const tokenizedLines = useMemo(
-    () => (formattedSql ? tokenizeSqlLines(formattedSql) : []),
-    [formattedSql]
+    () => (displaySql ? tokenizeSqlLines(displaySql) : []),
+    [displaySql]
   );
 
-  const errorSnippets = useMemo(() => {
-    if (!syntaxCheckEnabled || !validationErrors.length) return new Set<string>();
-    const set = new Set<string>();
-    for (const err of validationErrors) {
-      const s = err.snippet.trim().toLowerCase();
-      if (s && s.length >= 2) {
-        set.add(s);
-      }
+  const lineStartOffsets = useMemo(() => {
+    if (!displaySql) return [];
+    const lines = displaySql.split('\n');
+    const offsets: number[] = [];
+    let acc = 0;
+    for (const line of lines) {
+      offsets.push(acc);
+      acc += line.length + 1;
     }
-    return set;
-  }, [syntaxCheckEnabled, validationErrors]);
+    return offsets;
+  }, [displaySql]);
+
+  const activeErrors = useMemo(
+    () => (syntaxCheckEnabled || hasFormatError ? validationErrors : []),
+    [syntaxCheckEnabled, hasFormatError, validationErrors]
+  );
+
+  const errorLineSet = useMemo(
+    () => new Set(activeErrors.map((e) => e.line)),
+    [activeErrors]
+  );
 
   const diffLines = useMemo(
-    () => (showDiff && formattedSql ? computeLineDiff(rawSql, formattedSql) : []),
-    [showDiff, rawSql, formattedSql]
+    () =>
+      showDiff && formattedSql && !hasFormatError
+        ? computeLineDiff(rawSql, formattedSql)
+        : [],
+    [showDiff, rawSql, formattedSql, hasFormatError]
   );
 
-  if (error) {
-    return (
-      <div className="flex flex-1 flex-col items-center justify-center bg-white p-8 text-center dark:bg-slate-900">
-        <div className="max-w-md rounded-xl border border-red-200 bg-red-50/70 p-6 text-left dark:border-red-900/60 dark:bg-red-950/30">
-          <div className="flex items-start gap-3">
-            <AlertTriangle
-              className="mt-0.5 h-5 w-5 shrink-0 text-red-600 dark:text-red-400"
-              aria-hidden="true"
-            />
-            <div className="min-w-0">
-              <h3 className="text-sm font-semibold text-red-900 dark:text-red-200">
-                Помилка розбору SQL-синтаксису
-              </h3>
-              <p className="mt-1.5 text-sm leading-relaxed text-red-800 dark:text-red-300">
-                Перевірте незакриті лапки, дужки або переключіть діалект SQL у
-                панелі параметрів.
-              </p>
-              <pre className="mt-3 overflow-x-auto rounded-lg border border-red-200 bg-white px-3 py-2 font-mono text-xs text-red-700 dark:border-red-900/50 dark:bg-slate-950 dark:text-red-300">
-                {error}
-              </pre>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (!formattedSql.trim()) {
+  if (!displaySql.trim()) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center bg-white p-8 text-center dark:bg-slate-900">
         <div className="max-w-sm">
@@ -186,7 +232,7 @@ export const SqlCodeView: React.FC<SqlCodeViewProps> = ({
     );
   }
 
-  if (showDiff) {
+  if (showDiff && !hasFormatError) {
     return (
       <div className="code-scroll flex-1 min-h-0 overflow-auto bg-white py-4 font-mono text-[13px] leading-6 dark:bg-slate-900">
         <div className="min-w-max">
@@ -225,15 +271,13 @@ export const SqlCodeView: React.FC<SqlCodeViewProps> = ({
           aria-hidden="true"
           className="w-12 shrink-0 select-none border-r border-slate-200 bg-slate-50/80 text-right text-slate-400 tabular-nums dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-600"
         >
-          {tokenizedLines.map((tokens, idx) => {
-            const lineHasBadToken = tokens.some((tok) =>
-              tokenHasSyntaxError(tok, errorSnippets)
-            );
+          {tokenizedLines.map((_, idx) => {
+            const hasError = errorLineSet.has(idx + 1);
             return (
               <div
                 key={idx}
                 className={`pr-3 ${
-                  lineHasBadToken
+                  hasError
                     ? 'bg-red-500/15 font-semibold text-red-600 dark:bg-red-500/20 dark:text-red-400'
                     : ''
                 }`}
@@ -245,29 +289,33 @@ export const SqlCodeView: React.FC<SqlCodeViewProps> = ({
         </div>
         <pre className="flex-1 px-4 font-mono text-[13px] leading-6">
           <code>
-            {tokenizedLines.map((tokens, lineIdx) => (
-              <div key={lineIdx} className="whitespace-pre">
-                {tokens.length === 0 ? (
-                  '\u00A0'
-                ) : (
-                  tokens.map((tok, tokIdx) => {
-                    const isBad = tokenHasSyntaxError(tok, errorSnippets);
-                    return (
+            {tokenizedLines.map((tokens, lineIdx) => {
+              const slices = splitTokensWithErrors(
+                tokens,
+                lineStartOffsets[lineIdx] ?? 0,
+                activeErrors
+              );
+              return (
+                <div key={lineIdx} className="whitespace-pre">
+                  {slices.length === 0 ? (
+                    '\u00A0'
+                  ) : (
+                    slices.map((slice, sliceIdx) => (
                       <span
-                        key={tokIdx}
+                        key={sliceIdx}
                         className={
-                          isBad
-                            ? 'rounded-xs bg-red-500/20 font-semibold text-red-700 underline decoration-red-600 decoration-wavy underline-offset-4 dark:bg-red-500/30 dark:text-red-300 dark:decoration-red-400'
-                            : TOKEN_CLASSES[tok.type]
+                          slice.isError
+                            ? ERROR_TOKEN_CLASS
+                            : TOKEN_CLASSES[slice.type]
                         }
                       >
-                        {tok.value}
+                        {slice.value}
                       </span>
-                    );
-                  })
-                )}
-              </div>
-            ))}
+                    ))
+                  )}
+                </div>
+              );
+            })}
           </code>
         </pre>
       </div>

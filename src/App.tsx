@@ -286,14 +286,33 @@ export default function App() {
   };
 
   const inputMetrics = useMemo(() => getTextMetrics(inputSql), [inputSql]);
-  const outputMetrics = useMemo(() => getTextMetrics(outputSql), [outputSql]);
+  const displayedOutputSql = formatError ? inputSql : outputSql;
+  const outputMetrics = useMemo(
+    () => getTextMetrics(displayedOutputSql),
+    [displayedOutputSql]
+  );
   const validationErrors = useMemo(
     () =>
-      config.syntaxCheck
+      config.syntaxCheck || formatError
         ? validateSqlSyntax(inputSql, config.language)
         : [],
-    [config.syntaxCheck, config.language, inputSql]
+    [config.syntaxCheck, config.language, formatError, inputSql]
   );
+  const outputValidationErrors = useMemo(() => {
+    if (!displayedOutputSql.trim()) return [];
+    if (!config.syntaxCheck && !formatError) return [];
+    if (formatError || displayedOutputSql === inputSql) {
+      return validationErrors;
+    }
+    return validateSqlSyntax(displayedOutputSql, config.language);
+  }, [
+    config.language,
+    config.syntaxCheck,
+    displayedOutputSql,
+    formatError,
+    inputSql,
+    validationErrors,
+  ]);
 
   const dialectLabel = useMemo(
     () =>
@@ -733,9 +752,13 @@ export default function App() {
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50/70 px-4 py-2.5 dark:border-slate-800 dark:bg-slate-950/40">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
-                    {isMinified ? 'Мініфікований SQL' : 'Відформатований результат'}
+                    {formatError
+                      ? 'Невідформатований SQL'
+                      : isMinified
+                        ? 'Мініфікований SQL'
+                        : 'Відформатований результат'}
                   </h2>
-                  {outputSql && !formatError && (
+                  {displayedOutputSql && (
                     <span className="text-xs text-slate-500 tabular-nums dark:text-slate-400 whitespace-nowrap">
                       {outputMetrics.lines} ряд. · {outputMetrics.chars} симв. ·{' '}
                       {outputMetrics.statements}{' '}
@@ -798,10 +821,10 @@ export default function App() {
               <SqlCodeView
                 formattedSql={outputSql}
                 rawSql={inputSql}
-                error={formatError}
+                hasFormatError={Boolean(formatError)}
                 showDiff={showDiff}
                 onLoadSample={handleCyclePreset}
-                validationErrors={validationErrors}
+                validationErrors={outputValidationErrors}
                 syntaxCheckEnabled={config.syntaxCheck}
               />
             </div>
